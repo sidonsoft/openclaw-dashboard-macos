@@ -58,9 +58,11 @@ HTML_TEMPLATE = """
         .log-line:last-child { border-bottom: none; }
         .log-time { color: #6b7280; margin-right: 10px; }
         
-        .task-item { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid #3d3d3d; }
+        .task-item { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 12px 0; border-bottom: 1px solid #3d3d3d; }
         .task-item:last-child { border-bottom: none; }
-        .task-name { font-weight: 500; }
+        .task-main { min-width: 0; }
+        .task-name { font-weight: 600; margin-bottom: 3px; }
+        .task-summary { font-size: 12px; color: #a8b0bd; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 860px; }
         .task-status { padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 500; }
         .task-status.pending { background: #f59e0b20; color: #f59e0b; }
         .task-status.completed { background: #10b98120; color: #10b981; }
@@ -124,7 +126,10 @@ HTML_TEMPLATE = """
                 {% if tasks %}
                     {% for task in tasks %}
                     <div class="task-item" data-status="{{ task.status }}">
-                        <span class="task-name">{{ task.name }}</span>
+                        <div class="task-main">
+                            <div class="task-name">{{ task.name }}</div>
+                            <div class="task-summary">{{ task.summary }}</div>
+                        </div>
                         <span class="task-status {{ task.status }}">{{ task.status }}</span>
                     </div>
                     {% endfor %}
@@ -222,6 +227,17 @@ def _summarize_log_message(raw: str) -> str:
     """Convert noisy OpenClaw log lines into concise, human-readable summaries."""
     s = raw.strip()
 
+    # Unwrap common JSON-wrapped console payloads: {"0":"...","1":"...","_meta":...}
+    if s.startswith('{"0"'):
+        m1 = re.search(r'"1":"([^"]+)"', s)
+        m0 = re.search(r'"0":"([^"]+)"', s)
+        s = (m1.group(1) if m1 else (m0.group(1) if m0 else s))
+        s = s.replace('\\\"', '"').replace('\\n', ' ').replace('\\t', ' ').strip()
+
+    # Drop known noisy metadata blobs that don't help operators
+    if '"_meta"' in s and 'embedded run' not in s and 'lane ' not in s and 'sendMessage ok' not in s:
+        return ''
+
     # Common high-signal simplifications
     replacements = [
         (r"embedded run tool start:.*tool=([a-zA-Z0-9_-]+).*$", r"Tool started: \1"),
@@ -280,13 +296,17 @@ def get_openclaw_logs():
                 if not keep:
                     continue
 
+                summary = _summarize_log_message(msg)
+                if not summary:
+                    continue
                 logs.append({
                     'time': ts,
-                    'message': f"[{subsystem}] {_summarize_log_message(msg)}"
+                    'message': f"[{subsystem}] {summary}"
                 })
             else:
-                # Fallback line format
-                logs.append({'time': '', 'message': _summarize_log_message(line)})
+                summary = _summarize_log_message(line)
+                if summary:
+                    logs.append({'time': '', 'message': summary})
 
         return logs[-80:]
 
@@ -296,64 +316,68 @@ def get_openclaw_logs():
         return [{'time': '', 'message': f'Error reading logs: {str(e)}'}]
 
 
+def _short_task_text(text: str, max_len: int = 110) -> str:
+    text = (text or '').replace('\n', ' ').strip()
+    text = re.sub(r'\s+', ' ', text)
+    if len(text) > max_len:
+        return text[:max_len - 1] + '…'
+    return text
+
+
 def get_subagents_list():
-    """Build task list from OpenClaw sessions (CLI-safe)."""
+    """Build task list with agent + concise task summary from session store."""
     try:
-        result = subprocess.run(
-            ['openclaw', 'sessions', '--active', '180', '--json'],
-            capture_output=True,
-            text=True,
-            timeout=10
-        )
+        store_path = os.path.expanduser('~/.openclaw/agents/main/sessions/sessions.json')
+        if not os.path.exists(store_path):
+            return [], f"session store not found: {store_path}"
 
-        if result.returncode != 0:
-            err = (result.stderr or result.stdout or '').strip()
-            return [], f"sessions query failed: {err[:140]}"
+        with open(store_path, 'r', encoding='utf-8') as f:
+            store = json.load(f)
 
-        payload = json.loads(result.stdout or '{}')
-        sessions = payload.get('sessions', [])
-
-        tasks = []
         now_ms = int(datetime.now().timestamp() * 1000)
+        tasks = []
 
-        for s in sessions:
-            key = s.get('key', '')
-            model = s.get('model', 'unknown')
-            age_ms = s.get('ageMs', 0)
-            aborted = bool(s.get('abortedLastRun', False))
-
-            # Prefer subagent + group/direct work sessions; skip slash/system noise
-            if 'telegram:slash:' in key:
+        for key, s in store.items():
+            if 'subagent' not in key:
                 continue
 
-            # Heuristic status from session fields
+            updated_at = int(s.get('updatedAt', 0) or 0)
+            if not updated_at:
+                continue
+
+            age_ms = max(0, now_ms - updated_at)
+            aborted = bool(s.get('abortedLastRun', False))
+            model = s.get('model', 'unknown')
+            label = s.get('label') or 'subagent task'
+            spawned_by = s.get('spawnedBy', 'main')
+
+            # Heuristic statuses tuned for operator visibility:
+            # - fresh delegated work appears as TODO
+            # - medium-age work appears as pending
+            # - old work considered completed unless aborted
             if aborted:
                 status = 'failed'
-            elif age_ms <= 10 * 60 * 1000:
-                status = 'pending'  # recently active
+            elif age_ms < 20 * 60 * 1000:
+                status = 'todo'
+            elif age_ms < 2 * 60 * 60 * 1000:
+                status = 'pending'
             else:
                 status = 'completed'
 
-            name = key.replace('agent:main:', '')
-            if len(name) > 90:
-                name = name[:90] + '...'
+            agent_name = 'lmstudio' if 'qwen' in model.lower() else ('minimax' if 'minimax' in model.lower() else 'agent')
 
             tasks.append({
-                'name': f"{name} ({model})",
+                'name': _short_task_text(label, 70),
+                'summary': _short_task_text(f"{agent_name} • {model} • from {spawned_by}", 120),
                 'status': status,
-                'updatedAt': s.get('updatedAt', now_ms - age_ms)
+                'updatedAt': updated_at,
             })
 
-        # Most recent first
         tasks.sort(key=lambda x: x.get('updatedAt', 0), reverse=True)
-        return tasks[:80], None
+        return tasks[:120], None
 
-    except FileNotFoundError:
-        return [], "OpenClaw CLI not found. Is OpenClaw installed?"
-    except subprocess.TimeoutExpired:
-        return [], "sessions command timed out"
     except json.JSONDecodeError:
-        return [], "sessions output parse error"
+        return [], 'sessions.json parse error'
     except Exception as e:
         return [], f"Error: {str(e)}"
 
@@ -526,7 +550,7 @@ def print_startup_diagnostics():
 if __name__ == '__main__':
     import socket
     
-    def find_free_port(start_port=5000, max_attempts=10):
+    def find_free_port(start_port=5001, max_attempts=20):
         """Find a free port starting from start_port."""
         for port in range(start_port, start_port + max_attempts):
             try:

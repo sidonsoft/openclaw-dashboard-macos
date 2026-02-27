@@ -58,9 +58,16 @@ Open your browser to: **http://localhost:5000**
 - Check that OpenClaw is running and generating logs
 - Logs should be in `/tmp/openclaw/openclaw-*.log`
 
-### Port 5000 already in use
-- Modify the port in `app.py`: `app.run(host='0.0.0.0', port=5001)`
-- Or kill the existing process: `lsof -ti:5000 | xargs kill`
+### "Port 5000 already in use" (macOS)
+- On macOS, AirPlay Receiver often uses port 5000
+- The dashboard now automatically finds an available port (5001-5009)
+- If you want to use a specific port, modify `app.py`: `app.run(port=5001)`
+- Or disable AirPlay Receiver in System Settings → AirDrop & Handoff
+
+### To kill process on port 5000:
+```bash
+lsof -ti:5000 | xargs kill -9
+```
 
 ## Files
 

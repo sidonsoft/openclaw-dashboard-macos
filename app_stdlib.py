@@ -26,49 +26,49 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>OpenClaw Dashboard</title>
     <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #1e1e1e; color: #e0e0e0; min-height: 100vh; padding: 20px; }
-        .container { max-width: 1400px; margin: 0 auto; }
+        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #1e1e1e; color: #e0e0e0; min-height: 100vh; padding: 20px; }}
+        .container {{ max-width: 1400px; margin: 0 auto; }}
         
-        header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
-        h1 { font-size: 1.8rem; color: #7c3aed; }
-        .refresh-btn { background: #7c3aed; color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-size: 14px; transition: background 0.2s; }
-        .refresh-btn:hover { background: #6d28d9; }
+        header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }}
+        h1 {{ font-size: 1.8rem; color: #7c3aed; }}
+        .refresh-btn {{ background: #7c3aed; color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-size: 14px; transition: background 0.2s; }}
+        .refresh-btn:hover {{ background: #6d28d9; }}
         
-        .counters { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; margin-bottom: 20px; }
-        .counter { background: #2d2d2d; padding: 20px; border-radius: 12px; text-align: center; }
-        .counter-value { font-size: 2.5rem; font-weight: bold; }
-        .counter-label { font-size: 0.9rem; color: #9ca3af; margin-top: 5px; }
-        .counter.pending .counter-value { color: #f59e0b; }
-        .counter.completed .counter-value { color: #10b981; }
-        .counter.failed .counter-value { color: #ef4444; }
-        .counter.todo .counter-value { color: #3b82f6; }
+        .counters {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; margin-bottom: 20px; }}
+        .counter {{ background: #2d2d2d; padding: 20px; border-radius: 12px; text-align: center; }}
+        .counter-value {{ font-size: 2.5rem; font-weight: bold; }}
+        .counter-label {{ font-size: 0.9rem; color: #9ca3af; margin-top: 5px; }}
+        .counter.pending .counter-value {{ color: #f59e0b; }}
+        .counter.completed .counter-value {{ color: #10b981; }}
+        .counter.failed .counter-value {{ color: #ef4444; }}
+        .counter.todo .counter-value {{ color: #3b82f6; }}
         
-        .filters { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
-        .filter-chip { background: #2d2d2d; border: 1px solid #404040; color: #9ca3af; padding: 8px 16px; border-radius: 20px; cursor: pointer; font-size: 13px; transition: all 0.2s; }
-        .filter-chip:hover { border-color: #7c3aed; color: #e0e0e0; }
-        .filter-chip.active { background: #7c3aed; border-color: #7c3aed; color: white; }
+        .filters {{ display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }}
+        .filter-chip {{ background: #2d2d2d; border: 1px solid #404040; color: #9ca3af; padding: 8px 16px; border-radius: 20px; cursor: pointer; font-size: 13px; transition: all 0.2s; }}
+        .filter-chip:hover {{ border-color: #7c3aed; color: #e0e0e0; }}
+        .filter-chip.active {{ background: #7c3aed; border-color: #7c3aed; color: white; }}
         
-        .panel { background: #2d2d2d; border-radius: 12px; margin-bottom: 20px; overflow: hidden; }
-        .panel-header { background: #363636; padding: 15px 20px; font-weight: 600; font-size: 1rem; }
-        .panel-content { padding: 15px 20px; max-height: 300px; overflow-y: auto; }
+        .panel {{ background: #2d2d2d; border-radius: 12px; margin-bottom: 20px; overflow: hidden; }}
+        .panel-header {{ background: #363636; padding: 15px 20px; font-weight: 600; font-size: 1rem; }}
+        .panel-content {{ padding: 15px 20px; max-height: 300px; overflow-y: auto; }}
         
-        .log-line { font-family: 'SF Mono', Monaco, monospace; font-size: 12px; padding: 6px 0; border-bottom: 1px solid #3d3d3d; }
-        .log-line:last-child { border-bottom: none; }
-        .log-time { color: #6b7280; margin-right: 10px; }
+        .log-line {{ font-family: 'SF Mono', Monaco, monospace; font-size: 12px; padding: 6px 0; border-bottom: 1px solid #3d3d3d; }}
+        .log-line:last-child {{ border-bottom: none; }}
+        .log-time {{ color: #6b7280; margin-right: 10px; }}
         
-        .task-item { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid #3d3d3d; }
-        .task-item:last-child { border-bottom: none; }
-        .task-name { font-weight: 500; }
-        .task-status { padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 500; }
-        .task-status.pending { background: #f59e0b20; color: #f59e0b; }
-        .task-status.completed { background: #10b98120; color: #10b981; }
-        .task-status.failed { background: #ef444420; color: #ef4444; }
-        .task-status.todo { background: #3b82f620; color: #3b82f6; }
+        .task-item {{ display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid #3d3d3d; }}
+        .task-item:last-child {{ border-bottom: none; }}
+        .task-name {{ font-weight: 500; }}
+        .task-status {{ padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 500; }}
+        .task-status.pending {{ background: #f59e0b20; color: #f59e0b; }}
+        .task-status.completed {{ background: #10b98120; color: #10b981; }}
+        .task-status.failed {{ background: #ef444420; color: #ef4444; }}
+        .task-status.todo {{ background: #3b82f620; color: #3b82f6; }}
         
-        .warning { background: #f59e0b20; border: 1px solid #f59e0b; color: #f59e0b; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
-        .empty-state { color: #6b7280; font-style: italic; padding: 20px; text-align: center; }
-        .auto-refresh { font-size: 12px; color: #6b7280; }
+        .warning {{ background: #f59e0b20; border: 1px solid #f59e0b; color: #f59e0b; padding: 15px; border-radius: 8px; margin-bottom: 20px; }}
+        .empty-state {{ color: #6b7280; font-style: italic; padding: 20px; text-align: center; }}
+        .auto-refresh {{ font-size: 12px; color: #6b7280; }}
     </style>
 </head>
 <body>
@@ -250,9 +250,9 @@ def get_cron_jobs():
                 'schedule': 'scheduled'
             })
         
-        return    
-    except Exception jobs[:10]
-:
+        return jobs[:10]
+    
+    except Exception:
         return []
 
 
@@ -355,10 +355,27 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
 
 def main():
     """Start the dashboard server."""
-    print("🚀 Starting OpenClaw Dashboard (stdlib)...")
-    print(f"📍 Open http://localhost:{PORT} in your browser")
+    import socket
     
-    with socketserver.TCPServer(("", PORT), DashboardHandler) as httpd:
+    def find_free_port(start_port=5000, max_attempts=10):
+        """Find a free port starting from start_port."""
+        for port in range(start_port, start_port + max_attempts):
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.bind(('0.0.0.0', port))
+                    return port
+            except OSError:
+                continue
+        return start_port
+    
+    port = find_free_port()
+    
+    print("🚀 Starting OpenClaw Dashboard (stdlib)...")
+    print(f"📍 Open http://localhost:{port} in your browser")
+    if port != 5000:
+        print(f"⚠️  Port 5000 was in use, using port {port} instead")
+    
+    with socketserver.TCPServer(("", port), DashboardHandler) as httpd:
         httpd.serve_forever()
 
 

@@ -17,6 +17,5 @@ if ! python3 -c "import flask" 2>/dev/null; then
     pip install flask
 fi
 
-# Start the dashboard
-echo "🌐 Opening http://localhost:5000"
+# Start the dashboard (app.py now auto-finds available port)
 python3 app.py

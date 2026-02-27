@@ -395,6 +395,23 @@ def api_data():
 
 
 if __name__ == '__main__':
+    import socket
+    
+    def find_free_port(start_port=5000, max_attempts=10):
+        """Find a free port starting from start_port."""
+        for port in range(start_port, start_port + max_attempts):
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.bind(('0.0.0.0', port))
+                    return port
+            except OSError:
+                continue
+        return start_port
+    
+    port = find_free_port()
+    
     print("🚀 Starting OpenClaw Dashboard...")
-    print("📍 Open http://localhost:5000 in your browser")
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    print(f"📍 Open http://localhost:{port} in your browser")
+    if port != 5000:
+        print(f"⚠️  Port 5000 was in use, using port {port} instead")
+    app.run(host='0.0.0.0', port=port, debug=False)

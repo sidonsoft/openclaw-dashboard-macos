@@ -9,6 +9,7 @@ import os
 import glob
 import subprocess
 import json
+import re
 import http.server
 import socketserver
 from datetime import datetime
@@ -149,8 +150,33 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 """
 
 
+def _summarize_log_message(raw: str) -> str:
+    """Convert noisy OpenClaw log lines into concise, human-readable summaries."""
+    s = raw.strip()
+
+    # Common high-signal simplifications
+    replacements = [
+        (r"embedded run tool start:.*tool=([a-zA-Z0-9_-]+).*$", r"Tool started: \1"),
+        (r"embedded run tool end:.*tool=([a-zA-Z0-9_-]+).*$", r"Tool finished: \1"),
+        (r"embedded run done:.*aborted=(true|false).*$", r"Run finished (aborted=\1)"),
+        (r"lane enqueue: lane=([^\s]+).*$", r"Queued: \1"),
+        (r"lane dequeue: lane=([^\s]+).*$", r"Started: \1"),
+        (r"lane task done: lane=([^\s]+).*$", r"Completed: \1"),
+        (r"telegram sendMessage ok chat=([^\s]+).*$", r"Telegram sent to chat \1"),
+    ]
+    for pattern, repl in replacements:
+        m = re.search(pattern, s)
+        if m:
+            return re.sub(pattern, repl, s)
+
+    # Trim very long JSON-ish blobs to reduce noise
+    if len(s) > 220:
+        s = s[:220] + "…"
+    return s
+
+
 def get_openclaw_logs():
-    """Parse recent OpenClaw logs."""
+    """Parse recent OpenClaw logs into concise human-readable activity."""
     logs = []
     log_pattern = os.path.join(LOG_DIR, "openclaw-*.log")
     
@@ -163,66 +189,105 @@ def get_openclaw_logs():
         
         with open(latest_log, 'r', encoding='utf-8', errors='ignore') as f:
             lines = f.readlines()
-        
-        for line in lines[-100:]:
+
+        # Focus on recent lines; include high-signal events first
+        for line in lines[-220:]:
             line = line.strip()
-            if line:
-                parts = line.split(']', 1)
-                if len(parts) > 1:
-                    time_part = parts[0].strip('[')
-                    message = parts[1].strip()
-                else:
-                    time_part = ''
-                    message = line
-                logs.append({'time': time_part, 'message': message})
-        
-        return logs[-50:]
-    
-    except Exception:
+            if not line:
+                continue
+
+            # Expected format: ISO level [subsystem] message
+            m = re.match(r"^(\S+)\s+(\w+)\s+\[([^\]]+)\]\s+(.*)$", line)
+            if m:
+                ts, level, subsystem, msg = m.groups()
+                level_l = level.lower()
+
+                # Keep errors/warnings always; sample key info/debug lifecycle lines
+                keep = level_l in {"error", "warn"}
+                if not keep:
+                    keep = any(k in msg for k in [
+                        "lane task done", "lane enqueue", "lane dequeue",
+                        "embedded run", "sendMessage ok", "failed", "timeout"
+                    ])
+                if not keep:
+                    continue
+
+                logs.append({
+                    'time': ts,
+                    'message': f"[{subsystem}] {_summarize_log_message(msg)}"
+                })
+            else:
+                # Fallback line format
+                logs.append({'time': '', 'message': _summarize_log_message(line)})
+
+        return logs[-80:]
+
+    except FileNotFoundError:
         return []
+    except Exception as e:
+        return [{'time': '', 'message': f'Error reading logs: {str(e)}'}]
 
 
 def get_subagents_list():
-    """Parse subagent/task states from subagents list command."""
+    """Build task list from OpenClaw sessions (CLI-safe)."""
     try:
         result = subprocess.run(
-            ['openclaw', 'subagents', 'list'],
+            ['openclaw', 'sessions', '--active', '180', '--json'],
             capture_output=True,
             text=True,
             timeout=10
         )
-        
+
         if result.returncode != 0:
-            return [], result.stderr.strip()
-        
+            err = (result.stderr or result.stdout or '').strip()
+            return [], f"sessions query failed: {err[:140]}"
+
+        payload = json.loads(result.stdout or '{}')
+        sessions = payload.get('sessions', [])
+
         tasks = []
-        lines = result.stdout.strip().split('\n')
-        
-        for line in lines:
-            line = line.strip()
-            if not line or line.startswith('Session') or line.startswith('-'):
+        now_ms = int(datetime.now().timestamp() * 1000)
+
+        for s in sessions:
+            key = s.get('key', '')
+            model = s.get('model', 'unknown')
+            age_ms = s.get('ageMs', 0)
+            aborted = bool(s.get('abortedLastRun', False))
+
+            # Prefer subagent + group/direct work sessions; skip slash/system noise
+            if 'telegram:slash:' in key:
                 continue
-            
-            if any(status in line.lower() for status in ['pending', 'running', 'completed', 'failed', 'todo']):
-                status = 'pending'
-                if 'completed' in line.lower():
-                    status = 'completed'
-                elif 'failed' in line.lower():
-                    status = 'failed'
-                elif 'todo' in line.lower():
-                    status = 'todo'
-                
-                tasks.append({
-                    'name': line[:80] + ('...' if len(line) > 80 else ''),
-                    'status': status
-                })
-        
-        return tasks, None
-    
+
+            # Heuristic status from session fields
+            if aborted:
+                status = 'failed'
+            elif age_ms <= 10 * 60 * 1000:
+                status = 'pending'  # recently active
+            else:
+                status = 'completed'
+
+            name = key.replace('agent:main:', '')
+            if len(name) > 90:
+                name = name[:90] + '...'
+
+            tasks.append({
+                'name': f"{name} ({model})",
+                'status': status,
+                'updatedAt': s.get('updatedAt', now_ms - age_ms)
+            })
+
+        # Most recent first
+        tasks.sort(key=lambda x: x.get('updatedAt', 0), reverse=True)
+        return tasks[:80], None
+
     except FileNotFoundError:
-        return [], "OpenClaw CLI not found"
+        return [], "OpenClaw CLI not found. Is OpenClaw installed?"
+    except subprocess.TimeoutExpired:
+        return [], "sessions command timed out"
+    except json.JSONDecodeError:
+        return [], "sessions output parse error"
     except Exception as e:
-        return [], str(e)
+        return [], f"Error: {str(e)}"
 
 
 def get_cron_jobs():
@@ -333,6 +398,78 @@ def get_dashboard_html():
     )
 
 
+def check_data_sources():
+    """Check availability of each data source."""
+    sources = {
+        'openclaw_cli': False,
+        'log_files': False,
+        'sessions': False,
+        'cron': False
+    }
+    
+    # Check OpenClaw CLI
+    try:
+        result = subprocess.run(['openclaw', '--version'], capture_output=True, timeout=5)
+        sources['openclaw_cli'] = result.returncode == 0
+    except Exception:
+        pass
+    
+    # Check log files
+    try:
+        log_files = glob.glob(os.path.join(LOG_DIR, "openclaw-*.log"))
+        sources['log_files'] = len(log_files) > 0
+    except Exception:
+        pass
+    
+    # Check sessions
+    try:
+        result = subprocess.run(
+            ['openclaw', 'sessions', '--active', '180', '--json'],
+            capture_output=True, timeout=10
+        )
+        sources['sessions'] = result.returncode == 0
+    except Exception:
+        pass
+    
+    # Check cron
+    try:
+        result = subprocess.run(['openclaw', 'cron', 'list'], capture_output=True, timeout=10)
+        sources['cron'] = result.returncode == 0
+    except Exception:
+        pass
+    
+    return sources
+
+
+def get_health_data():
+    """Get health status for /healthz endpoint."""
+    sources = check_data_sources()
+    all_ok = sources.get('openclaw_cli', False) and sources.get('sessions', False)
+    
+    return {
+        'status': 'ok' if all_ok else 'degraded',
+        'version': '1.0.0',
+        'timestamp': datetime.now().isoformat(),
+        'dataSources': sources
+    }
+
+
+def print_startup_diagnostics():
+    """Print startup diagnostics to console."""
+    print("\n📊 Startup Diagnostics:")
+    sources = check_data_sources()
+    
+    status_map = {True: '✅', False: '❌'}
+    print(f"  {status_map[sources['openclaw_cli']]} OpenClaw CLI")
+    print(f"  {status_map[sources['log_files']]} Log files in {LOG_DIR}")
+    print(f"  {status_map[sources['sessions']]} Sessions API")
+    print(f"  {status_map[sources['cron']]} Cron API")
+    
+    if not sources['openclaw_cli']:
+        print("\n⚠️  Warning: OpenClaw CLI not found. Is OpenClaw installed?")
+    print()
+
+
 class DashboardHandler(http.server.BaseHTTPRequestHandler):
     """HTTP request handler for the dashboard."""
     
@@ -344,6 +481,12 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             html = get_dashboard_html()
             self.wfile.write(html.encode('utf-8'))
+        elif self.path == '/healthz':
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            health_data = get_health_data()
+            self.wfile.write(json.dumps(health_data).encode('utf-8'))
         else:
             self.send_response(404)
             self.end_headers()

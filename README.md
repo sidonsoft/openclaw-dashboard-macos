@@ -48,6 +48,48 @@ python3 app_stdlib.py
 
 Open your browser to: **http://localhost:5000**
 
+## Health Check
+
+Both dashboard versions include a `/healthz` endpoint for monitoring:
+
+```bash
+# Check health status (returns JSON)
+curl http://localhost:5000/healthz
+```
+
+Example response:
+```json
+{
+  "status": "ok",
+  "version": "1.0.0",
+  "timestamp": "2026-02-28T02:30:00.000000",
+  "dataSources": {
+    "openclaw_cli": true,
+    "log_files": true,
+    "sessions": true,
+    "cron": true
+  }
+}
+```
+
+## Startup Diagnostics
+
+On launch, both apps print diagnostics showing which data sources are available:
+
+```
+🚀 Starting OpenClaw Dashboard...
+
+📊 Startup Diagnostics:
+  ✅ OpenClaw CLI
+  ✅ Log files in /tmp/openclaw
+  ✅ Sessions API
+  ✅ Cron API
+
+📍 Open http://localhost:5001 in your browser
+```
+
+If any source is unavailable (❌), check the troubleshooting section.
+
 ## Troubleshooting
 
 ### "OpenClaw CLI not found"

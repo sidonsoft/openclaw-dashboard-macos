@@ -445,6 +445,84 @@ def api_data():
     })
 
 
+def check_data_sources():
+    """Check availability of each data source."""
+    sources = {
+        'openclaw_cli': False,
+        'log_files': False,
+        'sessions': False,
+        'cron': False
+    }
+    
+    # Check OpenClaw CLI
+    try:
+        result = subprocess.run(['openclaw', '--version'], capture_output=True, timeout=5)
+        sources['openclaw_cli'] = result.returncode == 0
+    except Exception:
+        pass
+    
+    # Check log files
+    try:
+        log_files = glob.glob(os.path.join(LOG_DIR, "openclaw-*.log"))
+        sources['log_files'] = len(log_files) > 0
+    except Exception:
+        pass
+    
+    # Check sessions
+    try:
+        result = subprocess.run(
+            ['openclaw', 'sessions', '--active', '180', '--json'],
+            capture_output=True, timeout=10
+        )
+        sources['sessions'] = result.returncode == 0
+    except Exception:
+        pass
+    
+    # Check cron
+    try:
+        result = subprocess.run(['openclaw', 'cron', 'list'], capture_output=True, timeout=10)
+        sources['cron'] = result.returncode == 0
+    except Exception:
+        pass
+    
+    return sources
+
+
+def get_health_data():
+    """Get health status for /healthz endpoint."""
+    sources = check_data_sources()
+    all_ok = sources.get('openclaw_cli', False) and sources.get('sessions', False)
+    
+    return {
+        'status': 'ok' if all_ok else 'degraded',
+        'version': '1.0.0',
+        'timestamp': datetime.now().isoformat(),
+        'dataSources': sources
+    }
+
+
+@app.route('/healthz')
+def healthz():
+    """Health check endpoint."""
+    return jsonify(get_health_data())
+
+
+def print_startup_diagnostics():
+    """Print startup diagnostics to console."""
+    print("\n📊 Startup Diagnostics:")
+    sources = check_data_sources()
+    
+    status_map = {True: '✅', False: '❌'}
+    print(f"  {status_map[sources['openclaw_cli']]} OpenClaw CLI")
+    print(f"  {status_map[sources['log_files']]} Log files in {LOG_DIR}")
+    print(f"  {status_map[sources['sessions']]} Sessions API")
+    print(f"  {status_map[sources['cron']]} Cron API")
+    
+    if not sources['openclaw_cli']:
+        print("\n⚠️  Warning: OpenClaw CLI not found. Is OpenClaw installed?")
+    print()
+
+
 if __name__ == '__main__':
     import socket
     
@@ -462,6 +540,7 @@ if __name__ == '__main__':
     port = find_free_port()
     
     print("🚀 Starting OpenClaw Dashboard...")
+    print_startup_diagnostics()
     print(f"📍 Open http://localhost:{port} in your browser")
     if port != 5000:
         print(f"⚠️  Port 5000 was in use, using port {port} instead")

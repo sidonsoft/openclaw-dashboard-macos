@@ -10,6 +10,8 @@ A local web dashboard for monitoring OpenClaw activity on macOS.
 - 🔄 Auto-refresh every 10 seconds
 - 🎯 Filter chips for task status
 - 🖥️ Native macOS-friendly dark theme
+- 🔮 Codex Usage panel (Windows quotas, account info)
+- 🦞 OpenClaw Session Usage panel (active sessions, token usage)
 
 ## Prerequisites
 

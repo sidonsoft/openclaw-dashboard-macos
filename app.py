@@ -176,6 +176,68 @@ HTML_TEMPLATE = """
                 {% endif %}
             </div>
         </div>
+        
+        {% if codex_usage %}
+        <div class="panel">
+            <div class="panel-header">
+                <span>🔮 Codex Usage</span>
+                <span style="font-weight: normal; font-size: 13px; color: #9ca3af;">{{ codex_usage.plan or 'Account' }}</span>
+            </div>
+            <div class="panel-content" style="max-height: 180px;">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                    <div>
+                        <div style="color: #9ca3af; font-size: 12px; margin-bottom: 4px;">Primary Window</div>
+                        <div style="font-size: 1.4rem; font-weight: bold;">{{ codex_usage.primary.usedPercent }}%</div>
+                        <div style="font-size: 11px; color: #6b7280;">{{ codex_usage.primary.resetDescription or '' }}</div>
+                    </div>
+                    <div>
+                        <div style="color: #9ca3af; font-size: 12px; margin-bottom: 4px;">Secondary Window</div>
+                        <div style="font-size: 1.4rem; font-weight: bold;">{{ codex_usage.secondary.usedPercent }}%</div>
+                        <div style="font-size: 11px; color: #6b7280;">{{ codex_usage.secondary.resetDescription or '' }}</div>
+                    </div>
+                </div>
+                {% if codex_usage.accountEmail %}
+                <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #3d3d3d; font-size: 12px; color: #9ca3af;">
+                    {{ codex_usage.accountEmail }}
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+        
+        {% if openclaw_usage %}
+        <div class="panel">
+            <div class="panel-header">
+                <span>🦞 OpenClaw Sessions</span>
+                <span style="font-weight: normal; font-size: 13px; color: #9ca3af;">{{ openclaw_usage.totalActive }} active</span>
+            </div>
+            <div class="panel-content" style="max-height: 220px;">
+                {% if openclaw_usage.mainSession %}
+                <div style="margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid #3d3d3d;">
+                    <div style="color: #9ca3af; font-size: 12px; margin-bottom: 4px;">Main Session</div>
+                    <div style="font-size: 13px;">{{ openclaw_usage.mainSession.model }}</div>
+                    <div style="font-size: 12px;">
+                        {{ openclaw_usage.mainSession.totalTokens|default(0) }} tokens / {{ openclaw_usage.mainSession.contextTokens|default(0) }} context
+                        {% if openclaw_usage.mainSession.tokenRatio %}({{ openclaw_usage.mainSession.tokenRatio }}%){% endif %}
+                    </div>
+                </div>
+                {% endif %}
+                {% if openclaw_usage.topSessions %}
+                <div style="color: #9ca3af; font-size: 12px; margin-bottom: 8px;">Top Sessions by Tokens</div>
+                    {% for session in openclaw_usage.topSessions %}
+                    <div class="task-item">
+                        <div class="task-main">
+                            <div class="task-name" style="font-size: 12px;">{{ session.key }}</div>
+                            <div class="task-summary" style="font-size: 11px;">{{ session.model }} • {{ session.totalTokens|default(0) }} tokens{% if session.tokenRatio %} ({{ session.tokenRatio }}%){% endif %}</div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                {% else %}
+                    <div class="empty-state">No session data</div>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
     </div>
     
     <script>
@@ -417,6 +479,112 @@ def get_cron_jobs():
         return []  # Graceful fallback
 
 
+def get_codex_usage():
+    """Collect Codex usage data from codexbar."""
+    try:
+        result = subprocess.run(
+            ['codexbar', 'usage', '--provider', 'codex', '--format', 'json'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        if result.returncode != 0:
+            return None
+        
+        data = json.loads(result.stdout)
+        if not data:
+            return None
+        
+        # Get first entry (codex provider)
+        entry = data[0] if isinstance(data, list) else data
+        usage = entry.get('usage', {})
+        
+        primary = usage.get('primary', {})
+        secondary = usage.get('secondary', {})
+        identity = usage.get('identity', {})
+        
+        return {
+            'primary': {
+                'usedPercent': primary.get('usedPercent'),
+                'resetDescription': primary.get('resetDescription')
+            },
+            'secondary': {
+                'usedPercent': secondary.get('usedPercent'),
+                'resetDescription': secondary.get('resetDescription')
+            },
+            'accountEmail': identity.get('accountEmail') or usage.get('accountEmail'),
+            'plan': identity.get('loginMethod') or usage.get('loginMethod')
+        }
+    
+    except Exception:
+        return None  # Graceful fallback
+
+
+def get_openclaw_usage():
+    """Collect OpenClaw session usage data."""
+    try:
+        result = subprocess.run(
+            ['openclaw', 'sessions', '--active', '180', '--json'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        if result.returncode != 0:
+            return None
+        
+        data = json.loads(result.stdout)
+        sessions = data.get('sessions', [])
+        
+        if not sessions:
+            return {'totalActive': 0, 'topSessions': [], 'mainSession': None}
+        
+        # Filter sessions with valid totalTokens
+        valid_sessions = [s for s in sessions if s.get('totalTokens') is not None]
+        
+        # Sort by totalTokens descending and get top 5
+        top_sessions = sorted(valid_sessions, key=lambda x: x.get('totalTokens', 0), reverse=True)[:5]
+        
+        top_5 = []
+        for s in top_sessions:
+            tokens = s.get('totalTokens', 0)
+            context = s.get('contextTokens', 0)
+            ratio = round(tokens / context * 100, 1) if context and tokens else None
+            
+            top_5.append({
+                'key': s.get('key', '')[:50] + ('...' if len(s.get('key', '')) > 50 else ''),
+                'model': s.get('model', 'unknown'),
+                'totalTokens': tokens,
+                'contextTokens': context,
+                'tokenRatio': ratio
+            })
+        
+        # Find main session
+        main_session = None
+        for s in sessions:
+            if s.get('key') == 'agent:main:main':
+                tokens = s.get('totalTokens', 0)
+                context = s.get('contextTokens', 0)
+                ratio = round(tokens / context * 100, 1) if context and tokens else None
+                main_session = {
+                    'totalTokens': tokens,
+                    'contextTokens': context,
+                    'tokenRatio': ratio,
+                    'model': s.get('model', 'unknown')
+                }
+                break
+        
+        return {
+            'totalActive': len(sessions),
+            'topSessions': top_5,
+            'mainSession': main_session
+        }
+    
+    except Exception:
+        return None  # Graceful fallback
+
+
 def calculate_stats(tasks):
     """Calculate status counters."""
     stats = {
@@ -441,6 +609,8 @@ def index():
     tasks, warning = get_subagents_list()
     cron_jobs = get_cron_jobs()
     stats = calculate_stats(tasks)
+    codex_usage = get_codex_usage()
+    openclaw_usage = get_openclaw_usage()
     
     return render_template_string(
         HTML_TEMPLATE,
@@ -449,7 +619,9 @@ def index():
         cron_jobs=cron_jobs,
         stats=stats,
         warning=warning,
-        refresh_interval=REFRESH_INTERVAL
+        refresh_interval=REFRESH_INTERVAL,
+        codex_usage=codex_usage,
+        openclaw_usage=openclaw_usage
     )
 
 
@@ -460,12 +632,16 @@ def api_data():
     tasks, _ = get_subagents_list()
     cron_jobs = get_cron_jobs()
     stats = calculate_stats(tasks)
+    codex_usage = get_codex_usage()
+    openclaw_usage = get_openclaw_usage()
     
     return jsonify({
         'logs': logs,
         'tasks': tasks,
         'cron_jobs': cron_jobs,
-        'stats': stats
+        'stats': stats,
+        'codex_usage': codex_usage,
+        'openclaw_usage': openclaw_usage
     })
 
 

@@ -4,14 +4,20 @@
 
 set -e
 
+LSOF_BIN="/usr/sbin/lsof"
+if [ ! -x "$LSOF_BIN" ]; then
+  LSOF_BIN="$(command -v lsof || true)"
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 APP_PY="$PROJECT_DIR/app.py"
 APP_STDIB="$PROJECT_DIR/app_stdlib.py"
 LOG_FILE="$PROJECT_DIR/dashboard_ctl.log"
+SERVER_LOG="$PROJECT_DIR/dashboard_server.log"
 
 # Default port range (macOS avoids 5000 for AirPlay)
-PORTS=(5001 5002 5003 5004 5005)
+PORTS=(5001 5002 5003 5004 5005 5006 5007 5008 5009 5010 5011 5012)
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"
@@ -34,22 +40,28 @@ EOF
 }
 
 find_available_port() {
-    for port in "${PORTS[@]}"; do
-        if ! lsof -i :$port &>/dev/null; then
-            echo "$port"
-            return 0
-        fi
-    done
-    log "ERROR: No available ports in range ${PORTS[*]}" >&2
-    return 1
+    python3 - <<'PY'
+import socket
+for p in range(5001, 5013):
+    s=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.bind(('127.0.0.1', p))
+        print(p)
+        s.close()
+        raise SystemExit(0)
+    except OSError:
+        s.close()
+print('')
+raise SystemExit(1)
+PY
 }
 
 check_process() {
-    pgrep -f "python3.*app\.py|python3.*app_stdlib\.py" >/dev/null 2>&1
+    pgrep -f "openclaw-dashboard-macos/.*/app\.py|openclaw-dashboard-macos/.*/app_stdlib\.py|python3 app\.py|python3 app_stdlib\.py|Python app\.py|Python app_stdlib\.py" >/dev/null 2>&1
 }
 
 get_pid() {
-    pgrep -f "python3.*app\.py|python3.*app_stdlib\.py" | head -1
+    pgrep -f "openclaw-dashboard-macos/.*/app\.py|openclaw-dashboard-macos/.*/app_stdlib\.py|python3 app\.py|python3 app_stdlib\.py|Python app\.py|Python app_stdlib\.py" | head -1
 }
 
 check_health() {
@@ -70,35 +82,42 @@ cmd_start() {
         exit 0
     fi
     
-    local port=$(find_available_port) || exit 1
-    log "Found available port: $port"
-    
-    # Start in background, redirect output to log file
+    # Start in background (use Flask app.py), keep server logs separate
     cd "$PROJECT_DIR"
-    python3 app_stdlib.py > "$LOG_FILE" 2>&1 &
+    nohup python3 app.py >> "$SERVER_LOG" 2>&1 &
     local pid=$!
     echo "$pid" > "${PROJECT_DIR}/dashboard.pid"
-    
-    log "Dashboard started with PID $pid on port $port"
-    echo "Dashboard started!"
-    echo "  PID: $pid"
-    echo "  Port: $port"
-    echo "  URL: http://localhost:$port"
-    echo "  Log: $LOG_FILE"
-    
-    # Wait for service to be ready (up to 10 seconds)
-    local retries=10
+
+    # Wait for service to be ready and discover port from /healthz
+    local retries=15
+    local active_port=""
     while [ $retries -gt 0 ]; do
-        if curl -s --max-time 2 "http://localhost:$port/healthz" >/dev/null 2>&1; then
-            echo "Dashboard is healthy!"
-            return 0
+        for p in "${PORTS[@]}"; do
+            if curl -s --max-time 1 "http://localhost:$p/healthz" >/dev/null 2>&1; then
+                active_port="$p"
+                break
+            fi
+        done
+        if [ -n "$active_port" ]; then
+            break
         fi
         sleep 1
         retries=$((retries - 1))
     done
-    
-    log "WARNING: Dashboard may not be ready yet, check $LOG_FILE" >&2
-    echo "Warning: Service startup delay, check log file for details"
+
+    log "Dashboard started with PID $pid${active_port:+ on port $active_port}"
+    echo "Dashboard started!"
+    echo "  PID: $pid"
+    if [ -n "$active_port" ]; then
+        echo "  Port: $active_port"
+        echo "  URL: http://localhost:$active_port"
+        echo "Dashboard is healthy!"
+        return 0
+    fi
+
+    echo "  Port: unknown (still starting)"
+    echo "  Log: $SERVER_LOG"
+    log "WARNING: Dashboard may not be ready yet, check $SERVER_LOG" >&2
     return 0
 }
 
@@ -108,7 +127,7 @@ cmd_stop() {
     if ! check_process; then
         log "No dashboard process running"
         echo "Dashboard is not running."
-        exit 0
+        return 0
     fi
     
     local pid=$(get_pid)
@@ -124,7 +143,8 @@ cmd_stop() {
     
     if check_process; then
         log "Force killing remaining process" >&2
-        pkill -9 -f "python3.*app\.py|python3.*app_stdlib\.py" || true
+        pkill -9 -f "app\.py" || true
+        pkill -9 -f "app_stdlib\.py" || true
     fi
     
     # Clean up PID file
@@ -148,16 +168,12 @@ cmd_status() {
         
         # Try to find which port it's using
         for port in "${PORTS[@]}"; do
-            if lsof -i :$port &>/dev/null; then
+            if check_health "$port"; then
                 echo "Active port: $port"
-                
-                # Check health status
                 local health=$(curl -s --max-time 2 "http://localhost:$port/healthz" 2>/dev/null)
                 if [ -n "$health" ]; then
                     echo "Health: OK"
                     echo "Details: $health" | python3 -m json.tool 2>/dev/null || echo "$health"
-                else
-                    echo "Health: Unable to check (service may be starting)"
                 fi
                 return 0
             fi
